@@ -66,3 +66,40 @@ As shown in this XnView comparison view—with the JPEGmini result above and the
 
 <img width="959" height="829" alt="image" src="https://github.com/user-attachments/assets/78faf09c-8865-40ed-96ca-83026a61c0e2" />
 
+---
+# JPEGLI Optimizer vs JPEGmini: Compression Test
+
+## Test Dataset
+27 diverse JPEG images including portraits, landscapes, architecture, text graphics, and various lighting conditions.
+
+## Results
+
+### JPEGLI Optimizer (Adaptive Butteraugli Distance)
+```
+Total images: 27
+✓ Processed: 23
+⊘ Skipped: 4 (already optimized)
+✗ Errors: 0
+Original: 65.88 MB
+New size: 45.66 MB
+Saved: 20.22 MB (30.7% reduction)
+```
+
+**Distance distribution:**
+- 0.65 (conservative): 10 images
+- 0.80 (moderate): 4 images  
+- 1.00 (balanced): 2 images
+- 1.20 (aggressive): 11 images
+
+**Top compressions:** 75.4%, 70.2%, 70.1%, 67.1%
+
+### JPEGmini
+```
+Total images: 27 (all except one processed)
+Original: 65.88 MB
+Saved: 20.73 MB (36% reduction)
+```
+
+## Conclusion
+
+The JPEGLI optimizer achieved **30.7% compression** vs JPEGmini's **36%** - a difference of only 5.3%. The JPEGLI optimizer's conservative approach skips optimized images and preserves fine details better, making it a quality-first alternative to commercial solutions.
