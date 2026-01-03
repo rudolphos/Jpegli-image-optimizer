@@ -86,10 +86,11 @@ Saved: 20.22 MB (30.7% reduction)
 ```
 
 **Distance distribution:**
-- 0.65 (conservative): 10 images
-- 0.80 (moderate): 4 images  
-- 1.00 (balanced): 2 images
-- 1.20 (aggressive): 11 images
+The adaptive algorithm selected distances based on image characteristics:
+- 0.65 (Conservative): 10 images - Low texture, smooth areas, portraits
+- 0.80 (Moderate): 4 images - Medium complexity
+- 1.00 (Balanced): 2 images - Mixed content
+- 1.20 (Aggressive): 11 images - High texture, complex scenes
 
 ### JPEGmini
 ```
