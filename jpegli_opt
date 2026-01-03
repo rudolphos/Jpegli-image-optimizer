@@ -1,0 +1,489 @@
+import tkinter as tk
+from tkinter import ttk, scrolledtext, messagebox
+from tkinterdnd2 import DND_FILES, TkinterDnD
+import subprocess
+import os
+import shutil
+from pathlib import Path
+from PIL import Image
+import threading
+import cv2
+import numpy as np
+
+# --- HELPER FUNCTIONS (Moved outside class) ---
+
+def predict_safe_distance(stats):
+    edge = stats["edge_density"]
+    texture = stats["texture"]
+    variance = stats["variance"]
+    noise = stats["noise"]
+
+    # Higher-quality base (IMPORTANT)
+    distance = 0.65
+
+    # Texture masking
+    if texture > 18:
+        distance += 0.5
+    elif texture > 10:
+        distance += 0.25
+
+    # Noise masking
+    if noise > 8:
+        distance += 0.4
+    elif noise > 4:
+        distance += 0.2
+
+    # Flat areas
+    if variance < 250:
+        distance -= 0.35
+    elif variance < 600:
+        distance -= 0.15
+
+    # Low-texture, smooth photos (skin/clouds)
+    if texture < 6 and variance < 800:
+        distance -= 0.2
+
+    # Text detection
+    text_score = edge / max(texture, 1.0)
+    if text_score > 0.018:
+        distance -= 0.25
+    elif text_score > 0.012:
+        distance -= 0.15
+
+    # General edge safety
+    if edge > 0.08:
+        distance -= 0.1
+
+    # Ultra-flat hard cap
+    if variance < 180:
+        distance = min(distance, 0.8)
+
+    return max(0.65, min(distance, 2.2))
+
+def analyze_image_fast(image_path, max_size=512):
+    """Fast perceptual proxy analysis (approx 10-20 ms)"""
+    img = Image.open(image_path).convert("RGB")
+
+    # Downscale for speed
+    w, h = img.size
+    scale = min(max_size / max(w, h), 1.0)
+    if scale < 1.0:
+        img = img.resize((int(w*scale), int(h*scale)), Image.BICUBIC)
+
+    img_np = np.array(img)
+    gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
+
+    # Edge detection (text + structure)
+    edges = cv2.Canny(gray, 80, 160)
+    edge_density = edges.mean()
+
+    # Texture / detail
+    lap = cv2.Laplacian(gray, cv2.CV_64F)
+    texture = np.mean(np.abs(lap))
+
+    # Flatness (screenshots hate compression)
+    variance = gray.var()
+
+    # Noise estimation (masking)
+    noise = np.median(np.abs(gray - cv2.GaussianBlur(gray, (3, 3), 0)))
+
+    return {
+        "edge_density": edge_density,
+        "texture": texture,
+        "variance": variance,
+        "noise": noise
+    }
+
+# --- MAIN CLASS ---
+
+class JPEGLIOptimizer:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("JPEGLI Image Optimizer")
+        self.root.geometry("550x600")
+        
+        script_dir = Path(__file__).parent
+        self.cjpegli_path = script_dir / "jxl" / "cjpegli.exe"
+        self.exiftool_path = script_dir / "exiftool.exe"
+        self.quality = tk.IntVar(value=94)
+        self.max_width = tk.IntVar(value=2000)
+        self.enable_resize = tk.BooleanVar(value=False)
+        self.auto_quality = tk.BooleanVar(value=True)
+        self.distance = tk.DoubleVar(value=0.90)
+        self.min_reduction = tk.IntVar(value=15)
+        self.enable_min_reduction = tk.BooleanVar(value=False)
+        
+        self.setup_ui()
+        
+    def setup_ui(self):
+        # Title
+        title_label = tk.Label(self.root, text="JPEGLI Optimizer", 
+                               font=("Arial", 13, "bold"))
+        title_label.pack(pady=8)
+        
+        # Settings Frame
+        settings_frame = ttk.LabelFrame(self.root, text="Settings", padding=10)
+        settings_frame.pack(fill="x", padx=10, pady=5)
+        
+        # Auto quality mode
+        auto_frame = ttk.Frame(settings_frame)
+        auto_frame.pack(fill="x", pady=5)
+        ttk.Checkbutton(auto_frame, text="Auto-optimize quality (Butteraugli distance)", 
+                       variable=self.auto_quality,
+                       command=self.toggle_quality_mode).pack(side="left")
+        
+        # Distance threshold frame (only visible in auto mode)
+        self.distance_frame = ttk.Frame(settings_frame)
+        self.distance_frame.pack(fill="x", pady=5)
+        ttk.Label(self.distance_frame, text="Distance:").pack(side="left")
+        distance_slider = ttk.Scale(self.distance_frame, from_=0.5, to=2.5, 
+                               variable=self.distance, orient="horizontal", length=150)
+        distance_slider.pack(side="left", padx=10)
+        self.distance_value = ttk.Label(self.distance_frame, text="0.9", width=5)
+        self.distance_value.pack(side="left")
+        ttk.Label(self.distance_frame, text="(lower=better quality)", 
+                 font=("Arial", 8)).pack(side="left", padx=5)
+        
+        def update_distance_label(val):
+            self.distance_value.config(text=f"{float(val):.2f}")
+        distance_slider.config(command=update_distance_label)
+        
+        # Quality slider frame (only visible in manual mode)
+        self.quality_frame = ttk.Frame(settings_frame)
+        ttk.Label(self.quality_frame, text="Quality:").pack(side="left")
+        quality_slider = ttk.Scale(self.quality_frame, from_=60, to=100, 
+                                   variable=self.quality, orient="horizontal", length=150)
+        quality_slider.pack(side="left", padx=10)
+        self.quality_value = ttk.Label(self.quality_frame, text="90", width=4)
+        self.quality_value.pack(side="left")
+        
+        def update_quality_label(val):
+            self.quality_value.config(text=f"{int(float(val))}")
+        quality_slider.config(command=update_quality_label)
+        
+        # Resize options
+        resize_frame = ttk.Frame(settings_frame)
+        resize_frame.pack(fill="x", pady=5)
+        ttk.Checkbutton(resize_frame, text="Resize to max width:", 
+                       variable=self.enable_resize).pack(side="left")
+        ttk.Entry(resize_frame, textvariable=self.max_width, width=8).pack(side="left", padx=5)
+        ttk.Label(resize_frame, text="px").pack(side="left")
+        
+        # Minimum reduction threshold
+        reduction_frame = ttk.Frame(settings_frame)
+        reduction_frame.pack(fill="x", pady=5)
+        ttk.Checkbutton(reduction_frame, text="Only replace if reduction ≥", 
+                       variable=self.enable_min_reduction).pack(side="left")
+        reduction_slider = ttk.Scale(reduction_frame, from_=5, to=50, 
+                               variable=self.min_reduction, orient="horizontal", length=100)
+        reduction_slider.pack(side="left", padx=10)
+        self.reduction_value = ttk.Label(reduction_frame, text="15%", width=5)
+        self.reduction_value.pack(side="left")
+        
+        def update_reduction_label(val):
+            self.reduction_value.config(text=f"{int(float(val))}%")
+        reduction_slider.config(command=update_reduction_label)
+        
+        # Initial toggle
+        self.toggle_quality_mode()
+        
+        # Drop zone
+        drop_frame = ttk.LabelFrame(self.root, text="Drop Images Here", padding=20)
+        drop_frame.pack(fill="both", expand=True, padx=10, pady=5)
+        
+        self.drop_label = tk.Label(drop_frame, 
+                                   text="Drag and drop JPG/JPEG images here\n\n📂",
+                                   font=("Arial", 12),
+                                   bg="#f0f0f0",
+                                   relief="solid",
+                                   borderwidth=2)
+        self.drop_label.pack(fill="both", expand=True)
+        
+        # Register drop target
+        self.drop_label.drop_target_register(DND_FILES)
+        self.drop_label.dnd_bind('<<Drop>>', self.on_drop)
+        
+        # Progress and log
+        progress_frame = ttk.Frame(self.root)
+        progress_frame.pack(fill="x", padx=10, pady=5)
+        
+        self.progress_var = tk.DoubleVar()
+        self.progress_bar = ttk.Progressbar(progress_frame, variable=self.progress_var, 
+                                           maximum=100)
+        self.progress_bar.pack(fill="x")
+        
+        # Log area
+        log_frame = ttk.LabelFrame(self.root, text="Log", padding=5)
+        log_frame.pack(fill="both", expand=True, padx=10, pady=5)
+        
+        self.log_text = scrolledtext.ScrolledText(log_frame, height=8, 
+                                                  state="disabled", wrap="word")
+        self.log_text.pack(fill="both", expand=True)
+        
+    def toggle_quality_mode(self):
+        if self.auto_quality.get():
+            self.quality_frame.pack_forget()
+            self.distance_frame.pack(fill="x", pady=5)
+        else:
+            self.distance_frame.pack_forget()
+            self.quality_frame.pack(fill="x", pady=5)
+        
+    def log(self, message):
+        self.log_text.config(state="normal")
+        self.log_text.insert("end", f"{message}\n")
+        self.log_text.see("end")
+        self.log_text.config(state="disabled")
+        self.root.update()
+        
+    def on_drop(self, event):
+        files = self.root.tk.splitlist(event.data)
+        image_files = [f for f in files if f.lower().endswith(('.jpg', '.jpeg'))]
+        
+        if not image_files:
+            messagebox.showwarning("No Images", "No JPG/JPEG files found in dropped items")
+            return
+            
+        # Process in separate thread to keep UI responsive
+        thread = threading.Thread(target=self.process_images, args=(image_files,))
+        thread.daemon = True
+        thread.start()
+        
+    def extract_all_metadata(self, file_path):
+        """Extract all metadata using ExifTool"""
+        metadata_file = file_path.with_suffix('.metadata.jpg')
+        
+        if not os.path.exists(self.exiftool_path):
+            self.log(f"  Warning: ExifTool not found, metadata will not be preserved")
+            return None
+        
+        try:
+            # Copy file to preserve metadata structure
+            shutil.copy2(file_path, metadata_file)
+            return metadata_file
+                
+        except Exception as e:
+            self.log(f"  Warning: Metadata backup failed: {e}")
+            return None
+        
+    def restore_all_metadata(self, file_path, metadata_file):
+        """Restore all metadata using ExifTool, preserving original structure"""
+        if not metadata_file or not metadata_file.exists():
+            return
+            
+        try:
+            # Copy all metadata preserving original groups with -all:all
+            cmd = [
+                str(self.exiftool_path),
+                '-tagsfromfile', str(metadata_file),
+                '-all:all',  # Preserve original group structure
+                '-overwrite_original',  # Don't create backup
+                str(file_path)
+            ]
+            
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            
+            if result.returncode == 0:
+                self.log(f"  Restored all metadata (EXIF/IPTC/XMP)")
+                # Clean up metadata file
+                metadata_file.unlink()
+            else:
+                self.log(f"  Warning: Could not restore metadata: {result.stderr}")
+                
+        except Exception as e:
+            self.log(f"  Warning: Metadata restoration failed: {e}")
+        finally:
+            # Clean up metadata file if it still exists
+            if metadata_file and metadata_file.exists():
+                try:
+                    metadata_file.unlink()
+                except:
+                    pass
+
+    def process_images(self, files):
+        if not os.path.exists(self.cjpegli_path):
+            self.log(f"ERROR: cjpegli.exe not found at {self.cjpegli_path}")
+            messagebox.showerror("Error", f"cjpegli.exe not found at {self.cjpegli_path}")
+            return
+            
+        total = len(files)
+        self.log(f"Processing {total} images...")
+        
+        # Track statistics
+        total_original_size = 0
+        total_new_size = 0
+        processed_count = 0
+        skipped_count = 0
+        
+        for idx, file_path in enumerate(files):
+            try:
+                result = self.process_single_image(file_path)
+                if result:
+                    total_original_size += result['original_size']
+                    total_new_size += result['new_size']
+                    if result['replaced']:
+                        processed_count += 1
+                    else:
+                        skipped_count += 1
+                progress = ((idx + 1) / total) * 100
+                self.progress_var.set(progress)
+            except Exception as e:
+                self.log(f"ERROR processing {os.path.basename(file_path)}: {str(e)}")
+        
+        # Calculate overall statistics
+        if total_original_size > 0:
+            overall_reduction = ((total_original_size - total_new_size) / total_original_size) * 100
+            saved_mb = (total_original_size - total_new_size) / (1024 * 1024)
+            
+            self.log(f"\n{'='*60}")
+            self.log(f"BATCH SUMMARY:")
+            self.log(f"  Total images: {total}")
+            self.log(f"  Processed: {processed_count}")
+            self.log(f"  Skipped: {skipped_count}")
+            self.log(f"  Original size: {total_original_size:,} bytes ({total_original_size/(1024*1024):.2f} MB)")
+            self.log(f"  New size: {total_new_size:,} bytes ({total_new_size/(1024*1024):.2f} MB)")
+            self.log(f"  Total saved: {saved_mb:.2f} MB ({overall_reduction:.1f}% reduction)")
+            self.log(f"{'='*60}\n")
+        else:
+            self.log(f"\n{'='*60}")
+            self.log(f"BATCH SUMMARY: Completed processing {total} images")
+            self.log(f"{'='*60}\n")
+    
+    
+    def process_single_image(self, file_path):
+        file_path = Path(file_path)
+        self.log(f"Processing: {file_path.name}")
+        stats = analyze_image_fast(file_path)
+        
+        # Get original file stats
+        original_size = file_path.stat().st_size
+        original_mtime = file_path.stat().st_mtime
+        original_atime = file_path.stat().st_atime
+        
+        # Always extract metadata
+        metadata_file = self.extract_all_metadata(file_path)
+        
+        # Create temp file
+        temp_file = file_path.with_suffix('.tmp.jpg')
+        
+        text_score = stats["edge_density"] / max(stats["texture"], 1.0)
+
+        if text_score > 0.015:
+            chroma = "444"
+        else:
+            chroma = "420"
+        
+        # Resize if needed
+        if self.enable_resize.get():
+            img = Image.open(file_path)
+            width, height = img.size
+            max_dim = max(width, height)
+            
+            if max_dim > self.max_width.get():
+                ratio = self.max_width.get() / max_dim
+                new_width = int(width * ratio)
+                new_height = int(height * ratio)
+                img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                resized_temp = file_path.with_suffix('.resized.jpg')
+                img.save(resized_temp, 'JPEG', quality=95)
+                source_file = resized_temp
+                self.log(f"  Resized: {width}x{height} → {new_width}x{new_height}")
+            else:
+                source_file = file_path
+        else:
+            source_file = file_path
+        
+        # Encode with cjpegli
+        if self.auto_quality.get():
+            # Use Butteraugli distance for single-pass optimization
+            stats = analyze_image_fast(source_file)
+            predicted_distance = predict_safe_distance(stats)
+
+            self.log(
+                f"  Adaptive distance: {predicted_distance:.2f} "
+                f"(edge={stats['edge_density']:.3f}, "
+                f"tex={stats['texture']:.1f}, "
+                f"var={stats['variance']:.0f})"
+            )
+
+            cmd = [
+                str(self.cjpegli_path),
+                str(source_file),
+                str(temp_file),
+                f"--distance={predicted_distance}",
+                f"--chroma_subsampling={chroma}",
+                "--progressive_level=2"
+            ]
+        else:
+            # Manual quality
+            cmd = [
+                str(self.cjpegli_path),
+                str(source_file),
+                str(temp_file),
+                f"--quality={self.quality.get()}"
+            ]
+            self.log(f"  Using manual quality: {self.quality.get()}")
+        
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        
+        if result.returncode != 0:
+            raise Exception(f"cjpegli failed: {result.stderr}")
+        
+        # Clean up resized temp if it exists
+        if self.enable_resize.get() and source_file != file_path:
+            source_file.unlink()
+        
+        # Get new file size
+        new_size = temp_file.stat().st_size
+        
+        # Calculate reduction percentage
+        reduction = ((original_size - new_size) / original_size) * 100
+        
+        # Check if we should keep the optimized version
+        should_skip = False
+        skip_reason = ""
+        
+        if reduction <= 0:
+            should_skip = True
+            skip_reason = "No further optimization possible"
+        elif self.enable_min_reduction.get() and reduction < self.min_reduction.get():
+            should_skip = True
+            skip_reason = f"{reduction:.1f}% reduction < {self.min_reduction.get()}% threshold"
+        
+        if should_skip:
+            self.log(f"  Skipped: {skip_reason}")
+            # Remove temp file and keep original
+            temp_file.unlink()
+            # Clean up metadata backup
+            if metadata_file and metadata_file.exists():
+                metadata_file.unlink()
+            # Return stats for skipped file
+            return {
+                'original_size': original_size,
+                'new_size': original_size,  # No change
+                'replaced': False
+            }
+        
+        # Replace original file (only if we passed the checks above)
+        shutil.move(str(temp_file), str(file_path))
+        
+        # Always restore metadata
+        if metadata_file:
+            self.restore_all_metadata(file_path, metadata_file)
+        
+        # Restore timestamps (date modified/created)
+        os.utime(file_path, (original_atime, original_mtime))
+        
+        # Log results
+        self.log(f"  {original_size:,} → {new_size:,} bytes ({reduction:.1f}% reduction)")
+        
+        # Return stats for processed file
+        return {
+            'original_size': original_size,
+            'new_size': new_size,
+            'replaced': True
+        }
+
+if __name__ == "__main__":
+    root = TkinterDnD.Tk()
+    app = JPEGLIOptimizer(root)
+    root.mainloop()
