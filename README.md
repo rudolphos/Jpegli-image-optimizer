@@ -91,8 +91,6 @@ Saved: 20.22 MB (30.7% reduction)
 - 1.00 (balanced): 2 images
 - 1.20 (aggressive): 11 images
 
-**Top compressions:** 75.4%, 70.2%, 70.1%, 67.1%
-
 ### JPEGmini
 ```
 Total images: 27 (all except one processed)
@@ -102,4 +100,4 @@ Saved: 20.73 MB (36% reduction)
 
 ## Conclusion
 
-The JPEGLI optimizer achieved **30.7% compression** vs JPEGmini's **36%** - a difference of only 5.3%. The JPEGLI optimizer's conservative approach skips optimized images and preserves fine details better, making it a quality-first alternative to commercial solutions.
+The JPEGLI optimizer achieved **30.7% compression** vs JPEGmini's **36%** - a difference of only 5.3%. The JPEGLI optimizer's conservative approach skips optimized images and preserves fine details better, making it a quality-first open source alternative to commercial solutions.
