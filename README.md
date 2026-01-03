@@ -57,3 +57,6 @@ Ensure your directory looks like this:
 5.  The tool will replace the original files only if they can be compressed smaller without visual loss.
 
 <img width="688" height="825" alt="screen" src="https://github.com/user-attachments/assets/8739f1e7-5fd2-4726-a374-b7d06a628d5c" />
+
+As shown in this XnView comparison view—with the JPEGmini result above and the script output below—the visual similarity is nearly identical, though this script retains slightly more detail, less blurriness and blockiness when compared at 400% zoom level. <img width="959" height="829" alt="image" src="https://github.com/user-attachments/assets/78faf09c-8865-40ed-96ca-83026a61c0e2" />
+
