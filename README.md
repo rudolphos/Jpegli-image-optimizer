@@ -86,6 +86,7 @@ Saved: 20.22 MB (30.7% reduction)
 ```
 
 **Distance distribution:**
+
 The adaptive algorithm selected distances based on image characteristics:
 - 0.65 (Conservative): 10 images - Low texture, smooth areas, portraits
 - 0.80 (Moderate): 4 images - Medium complexity
