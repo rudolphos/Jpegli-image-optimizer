@@ -44,4 +44,16 @@ Ensure your directory looks like this:
       └── cjpegli.exe     # The encoder
 ```
 
+### 🚀 Usage
+
+1.  Run the script:
+    ```bash
+    python optimizer.py
+    ```
+    Or double-click the py file.
+2.  **Toggle "Auto-optimize"**: Enables the computer vision analysis.
+3.  Make a back-up of your existing image files.
+4.  **Drag and drop** your `.jpg`/`.jpeg` files onto the window.
+5.  The tool will replace the original files only if they can be compressed smaller without visual loss.
+
 <img width="688" height="825" alt="screen" src="https://github.com/user-attachments/assets/8739f1e7-5fd2-4726-a374-b7d06a628d5c" />
