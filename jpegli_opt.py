@@ -7,64 +7,72 @@ import shutil
 from pathlib import Path
 from PIL import Image
 import threading
+import concurrent.futures
 import cv2
 import numpy as np
 
 # --- HELPER FUNCTIONS ---
+
 def predict_safe_distance(stats):
     """
-    Predict optimal Butteraugli distance using Fluid Linear Logic.
-    Refined for ~49-50% reduction (High Quality).
+    Predict optimal distance.
+    MODE A: Screenshots (0.55 dist).
+    MODE B: Photos (Aggressive, 0.75 - 2.2 dist).
     """
     edge = stats["edge_density"]
     texture = stats["texture"]
     variance = stats["variance"]
     noise = stats["noise"]
 
-    # --- 1. THE BASELINE ---
-    # Lowered from 0.65 to 0.62.
-    # This adds roughly 3-5% to the file size across the board for extra safety.
-    distance = 0.62
+    # --- 1. STRICT SCREENSHOT PROTECTION ---
+    # Digital graphics (Noise ~0.0). Absolute safety required.
+    if noise < 0.5:
+        return 0.55 
 
-    # --- 2. DYNAMIC TEXTURE BONUS (Linear) ---
-    # Increased threshold from 5.0 to 6.0.
-    # Now, images must be "properly textured" before we compress them more.
-    if texture > 6.0:
-        # Slope remains 0.02
-        tex_bonus = (texture - 6.0) * 0.02
-        # Cap remains 0.40
-        distance += min(tex_bonus, 0.40)
+    # --- 2. PHOTO BASELINE (Aggressive) ---
+    # This acts as the "Floor" for photography.
+    distance = 0.65
 
-    # --- 3. EDGE BRAKING ---
-    # (Face/Text Saver)
+    # --- 3. AGGRESSIVE TEXTURE SCALING ---
+    # We allow distance to climb significantly if texture exists.
+    if texture > 3.0:
+        # Steeper slope (0.04) allows rapid quality drop on busy images.
+        tex_bonus = (texture - 3.0) * 0.04
+        distance += tex_bonus 
+
+    # --- 4. INTELLIGENT BRAKING (Face Protection) ---
+    # If the image has edges (faces) but not infinite texture, pull back.
     if edge > 0.10:
-        brake = (edge - 0.10) * 2.6
+        brake = (edge - 0.10) * 3.5 
         distance -= brake
 
-    # --- 4. NOISE & SKY SAFETY ---
-    if noise > 6.0:
-        distance += 0.05
+    # --- 5. NOISE HANDLING ---
+    if noise > 5.0:
+        # High ISO noise hides artifacts, allow more compression
+        distance += 0.2
     
-    # Gradient protection
-    if variance < 800:
-        distance -= 0.05
+    # Sky protection (Low variance)
+    # Critical: If variance is low, FORCE distance down.
+    if variance < 600:
+        return 0.65
 
-    # --- 5. HARD BOUNDARIES ---
-    # Min 0.62 (Very high quality)
-    # Max 1.0 (Safe limit)
-    return max(0.62, min(distance, 1.0))
+    # --- 6. LIMITS ---
+    return max(0.55, min(distance, 2.2))
 
 def analyze_image_fast(image_path, max_size=None):
-    """Full resolution analysis using OpenCV directly."""
+    """
+    Full resolution analysis using OpenCV directly.
+    Works with JPEG and PNG files.
+    """
     try:
-        # Load image stream directly to numpy array (Fastest method)
-        # 0 flag loads as Grayscale directly
+        # Load image stream directly to numpy array (Fastest & Unicode safe)
         stream = open(image_path, "rb")
         bytes_data = bytearray(stream.read())
         numpy_array = np.asarray(bytes_data, dtype=np.uint8)
         stream.close()
         
-        gray = cv2.imdecode(numpy_array, 0) # 0 = CV_LOAD_IMAGE_GRAYSCALE
+        # 0 flag loads as Grayscale directly
+        gray = cv2.imdecode(numpy_array, 0) 
         
         if gray is None:
             raise Exception("Image decode failed")
@@ -75,7 +83,6 @@ def analyze_image_fast(image_path, max_size=None):
         gray = np.array(img)
 
     # 1. Edge Detection
-    # Thresholds adjusted for full resolution natural photography
     edges = cv2.Canny(gray, 50, 150)
     edge_density = np.mean(edges) / 255.0
 
@@ -87,7 +94,6 @@ def analyze_image_fast(image_path, max_size=None):
     variance = np.var(gray)
 
     # 4. Noise Estimation (Center Crop Strategy)
-    # Analyzing full 24MP+ noise is slow, so we take a large center sample
     h, w = gray.shape
     sample_size = 2048
     if h > sample_size and w > sample_size:
@@ -106,12 +112,18 @@ def analyze_image_fast(image_path, max_size=None):
     }
 
 # --- MAIN CLASS ---
+
 class JPEGLIOptimizer:
     def __init__(self, root):
         self.root = root
-        self.root.title("JPEGLI Image Optimizer")
-        self.root.geometry("550x600")
-       
+        self.root.title("JPEGLI Optimizer")
+        self.root.geometry("600x650")
+        
+        # Style configuration
+        style = ttk.Style()
+        style.theme_use('xpnative')
+        style.configure('Horizontal.TScale', sliderlength=20, sliderthickness=15)
+        
         # Paths
         script_dir = Path(__file__).parent
         self.cjpegli_path = script_dir / "jxl" / "cjpegli.exe"
@@ -122,83 +134,56 @@ class JPEGLIOptimizer:
         self.max_width = tk.IntVar(value=2000)
         self.enable_resize = tk.BooleanVar(value=False)
         self.auto_quality = tk.BooleanVar(value=True)
-        self.min_reduction = tk.IntVar(value=20)
+        self.min_reduction = tk.IntVar(value=15)
         self.enable_min_reduction = tk.BooleanVar(value=False)
+        
+        # Threading Stats
+        self.stats_lock = threading.Lock()
+        self.batch_stats = {}
         self.processing = False
         
-        # Validate tools on startup
         self.validate_tools()
         self.setup_ui()
         
     def validate_tools(self):
-        """Validate that required tools exist before allowing processing"""
         errors = []
-        
         if not self.cjpegli_path.exists():
             errors.append(f"cjpegli.exe not found at:\n{self.cjpegli_path}")
-        
         if not self.exiftool_path.exists():
             errors.append(f"exiftool.exe not found at:\n{self.exiftool_path}")
-        
         if errors:
-            error_msg = "\n\n".join(errors)
-            error_msg += "\n\nMetadata preservation is mandatory. Please ensure all required tools are present."
-            messagebox.showerror("Missing Required Tools", error_msg)
+            messagebox.showerror("Missing Tools", "\n\n".join(errors))
             self.root.quit()
-            raise SystemExit("Required tools not found")
         
     def setup_ui(self):
-        # Title
-        title_label = tk.Label(
-            self.root, 
-            text="JPEGLI Optimizer", 
-            font=("Arial Nova", 13, "bold")
-        )
-        title_label.pack(pady=8)
-        
-        # Settings Frame
+        # Settings
         settings_frame = ttk.LabelFrame(self.root, text="Settings", padding=10)
         settings_frame.pack(fill="x", padx=10, pady=5)
         
-        # Auto quality mode
-        auto_frame = ttk.Frame(settings_frame)
-        auto_frame.pack(fill="x", pady=5)
-        ttk.Checkbutton(
-            auto_frame, 
-            text="Auto-optimize quality", 
-            variable=self.auto_quality,
-            command=self.toggle_quality_mode
-        ).pack(side="left")
+        # Combined Quality Control Row
+        qc_row = ttk.Frame(settings_frame)
+        qc_row.pack(fill="x", pady=5)
         
-        # Quality slider frame (manual mode)
-        self.quality_frame = ttk.Frame(settings_frame)
-        ttk.Label(self.quality_frame, text="Quality:").pack(side="left")
-        quality_slider = ttk.Scale(
-            self.quality_frame, 
-            from_=75, 
-            to=100, 
-            variable=self.quality, 
-            orient="horizontal", 
-            length=150
-        )
-        quality_slider.pack(side="left", padx=10)
-        self.quality_value = ttk.Label(self.quality_frame, text="94", width=4)
-        self.quality_value.pack(side="left")
+        # Auto Checkbox
+        ttk.Checkbutton(qc_row, text="Auto-optimize (Smart Detect)", variable=self.auto_quality, command=self.toggle_quality_mode).pack(side="left")
         
-        quality_slider.config(command=lambda val: self.quality_value.config(text=f"{int(float(val))}"))
+        # Manual Controls Group
+        self.manual_controls_frame = ttk.Frame(qc_row)
+        ttk.Label(self.manual_controls_frame, text="Quality:").pack(side="left", padx=(15, 5))
+        qs = ttk.Scale(self.manual_controls_frame, from_=60, to=100, variable=self.quality, orient="horizontal", length=150)
+        qs.pack(side="left")
+        self.q_val = ttk.Label(self.manual_controls_frame, text="95", width=4)
+        self.q_val.pack(side="left", padx=5)
+        qs.config(command=lambda val: self.q_val.config(text=f"{int(float(val))}"))
         
-        # Resize options
+        # Resize
         resize_frame = ttk.Frame(settings_frame)
         resize_frame.pack(fill="x", pady=5)
-        ttk.Checkbutton(
-            resize_frame, 
-            text="Resize to max width:", 
-            variable=self.enable_resize
-        ).pack(side="left")
+        ttk.Checkbutton(resize_frame, text="Resize max width:", variable=self.enable_resize).pack(side="left")
         ttk.Entry(resize_frame, textvariable=self.max_width, width=8).pack(side="left", padx=5)
         ttk.Label(resize_frame, text="px").pack(side="left")
         
-        # Minimum reduction threshold
+        # Minimum Reduction
         reduction_frame = ttk.Frame(settings_frame)
         reduction_frame.pack(fill="x", pady=5)
         ttk.Checkbutton(
@@ -206,333 +191,359 @@ class JPEGLIOptimizer:
             text="Only replace if reduction ≥", 
             variable=self.enable_min_reduction
         ).pack(side="left")
-        reduction_slider = ttk.Scale(
-            reduction_frame, 
-            from_=5, 
-            to=50, 
-            variable=self.min_reduction, 
-            orient="horizontal", 
-            length=100
-        )
-        reduction_slider.pack(side="left", padx=10)
-        self.reduction_value = ttk.Label(reduction_frame, text="15%", width=5)
-        self.reduction_value.pack(side="left")
         
-        reduction_slider.config(command=lambda val: self.reduction_value.config(text=f"{int(float(val))}%"))
+        rs = ttk.Scale(reduction_frame, from_=1, to=50, variable=self.min_reduction, orient="horizontal", length=100)
+        rs.pack(side="left", padx=10)
+        self.r_val = ttk.Label(reduction_frame, text="15%", width=5)
+        self.r_val.pack(side="left")
+        rs.config(command=lambda val: self.r_val.config(text=f"{int(float(val))}%"))
         
-        # Initial toggle
         self.toggle_quality_mode()
         
-        # Drop zone
+        # Drop Zone
         drop_frame = ttk.LabelFrame(self.root, padding=5)
         drop_frame.pack(fill="both", expand=True, padx=10, pady=5)
         
-        self.drop_label = tk.Label(
-            drop_frame, 
-            text="Drag and drop JPG/JPEG images here\n\n📂",
-            font=("Arial Nova", 12),
-            bg="#f0f0f0",
-            relief="solid",
-            borderwidth=1
-        )
+        self.drop_label = tk.Label(drop_frame, text="Drag & Drop Images Here\n(JPG/JPEG/PNG)", font=("Arial Nova", 12), bg="#f0f0f0", relief="solid", bd=1)
         self.drop_label.pack(fill="both", expand=True)
-        
-        # Register drop target
         self.drop_label.drop_target_register(DND_FILES)
         self.drop_label.dnd_bind('<<Drop>>', self.on_drop)
         
         # Progress
-        progress_frame = ttk.Frame(self.root)
-        progress_frame.pack(fill="x", padx=10, pady=5)
-        
         self.progress_var = tk.DoubleVar()
-        self.progress_bar = ttk.Progressbar(
-            progress_frame, 
-            variable=self.progress_var, 
-            maximum=100
-        )
-        self.progress_bar.pack(fill="x")
+        self.progress_bar = ttk.Progressbar(self.root, variable=self.progress_var, maximum=100)
+        self.progress_bar.pack(fill="x", padx=10, pady=5)
         
-        # Log area
+        # Log
         log_frame = ttk.LabelFrame(self.root, text="Log", padding=5)
         log_frame.pack(fill="both", expand=True, padx=10, pady=5)
-        
-        self.log_text = scrolledtext.ScrolledText(
-            log_frame, 
-            height=8, 
-            state="disabled", 
-            wrap="word"
-        )
+        self.log_text = scrolledtext.ScrolledText(log_frame, height=8, state="disabled")
         self.log_text.pack(fill="both", expand=True)
-        
+
     def toggle_quality_mode(self):
-        """Toggle between auto and manual quality mode"""
         if self.auto_quality.get():
-            self.quality_frame.pack_forget()
+            self.manual_controls_frame.pack_forget()
         else:
-            self.quality_frame.pack(fill="x", pady=5)
-        
-    def log(self, message):
-        """Thread-safe logging to text widget"""
+            self.manual_controls_frame.pack(side="left")
+
+    def safe_log(self, message):
+        """Thread-safe UI logging"""
+        self.root.after(0, self._log_impl, message)
+
+    def _log_impl(self, message):
         self.log_text.config(state="normal")
         self.log_text.insert("end", f"{message}\n")
         self.log_text.see("end")
         self.log_text.config(state="disabled")
-        self.root.update_idletasks()
-        
+
+    def safe_progress(self, value):
+        self.root.after(0, lambda: self.progress_var.set(value))
+
     def on_drop(self, event):
-        """Handle drag and drop event"""
-        if self.processing:
-            messagebox.showwarning("Processing", "Please wait for current batch to complete")
-            return
-            
+        if self.processing: return
         files = self.root.tk.splitlist(event.data)
-        image_files = [f for f in files if f.lower().endswith(('.jpg', '.jpeg'))]
+        # Accept both JPEG and PNG files
+        image_files = [f for f in files if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
         
         if not image_files:
-            messagebox.showwarning("No Images", "No JPG/JPEG files found in dropped items")
+            self.safe_log("No JPG/JPEG/PNG files found in dropped items.")
             return
         
-        # Process in separate thread
-        thread = threading.Thread(target=self.process_images, args=(image_files,))
-        thread.daemon = True
-        thread.start()
-        
-    def extract_metadata(self, file_path):
-        """Extract metadata using ExifTool - MANDATORY"""
-        metadata_file = file_path.with_suffix('.metadata.jpg')
-        
-        try:
-            shutil.copy2(file_path, metadata_file)
-            return metadata_file
-        except Exception as e:
-            raise Exception(f"Failed to backup metadata: {e}")
-        
-    def restore_metadata(self, file_path, metadata_file):
-        """Restore metadata using ExifTool - MANDATORY"""
-        if not metadata_file or not metadata_file.exists():
-            raise Exception("Metadata backup file not found")
-            
-        try:
-            cmd = [
-                str(self.exiftool_path),
-                '-charset', 'filename=UTF8'
-                '-tagsfromfile', str(metadata_file),
-                '-all:all',
-                '-overwrite_original',
-                str(file_path)
-            ]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-            if result.returncode != 0:
-                raise Exception(f"ExifTool failed: {result.stderr}")
-            metadata_file.unlink()
-            
-        except Exception as e:
-            raise Exception(f"Failed to restore metadata: {e}")
-        finally:
-            # Cleanup
-            if metadata_file and metadata_file.exists():
-                try:
-                    metadata_file.unlink()
-                except:
-                    pass
+        # Run batch in thread
+        threading.Thread(target=self.process_batch, args=(image_files,), daemon=True).start()
 
-    def process_images(self, files):
-        """Process batch of images"""
+    def process_batch(self, files):
         self.processing = True
-        self.progress_var.set(0)
+        self.safe_progress(0)
+        self.log_text.config(state="normal"); self.log_text.delete(1.0, "end"); self.log_text.config(state="disabled")
         
         total = len(files)
-        self.log(f"Starting batch processing of {total} images...")
+        # Use All Cores minus 1 (min 1 worker)
+        max_workers = max(1, os.cpu_count() - 1)
         
-        stats = {
-            'total_original_size': 0,
-            'total_new_size': 0,
-            'processed': 0,
-            'skipped': 0,
-            'errors': 0
+        self.safe_log(f"🚀 Starting parallel batch: {total} images using {max_workers} threads...")
+        
+        self.batch_stats = {
+            'original_size': 0, 'new_size': 0, 
+            'processed': 0, 'skipped': 0, 'errors': 0
         }
         
-        for idx, file_path in enumerate(files):
-            try:
-                result = self.process_single_image(file_path)
-                if result:
-                    stats['total_original_size'] += result['original_size']
-                    stats['total_new_size'] += result['new_size']
-                    if result['replaced']:
-                        stats['processed'] += 1
-                    else:
-                        stats['skipped'] += 1
-            except Exception as e:
-                stats['errors'] += 1
-                self.log(f"✗ ERROR processing {os.path.basename(file_path)}: {str(e)}")
-            
-            self.progress_var.set(((idx + 1) / total) * 100)
+        completed = 0
         
-        # Summary
-        self.print_summary(stats, total)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(self.process_single_image, f): f for f in files}
+            
+            for future in concurrent.futures.as_completed(futures):
+                try:
+                    result = future.result()
+                    if result:
+                        with self.stats_lock:
+                            self.batch_stats['original_size'] += result['original_size']
+                            self.batch_stats['new_size'] += result['new_size']
+                            self.batch_stats['processed' if result['replaced'] else 'skipped'] += 1
+                except Exception as e:
+                    with self.stats_lock:
+                        self.batch_stats['errors'] += 1
+                    self.safe_log(f"✗ Error: {os.path.basename(futures[future])}: {e}")
+                
+                self.safe_progress((len([f for f in futures if f.done()]) / total) * 100)
+
+        self.print_summary(total)
         self.processing = False
-    
-    def print_summary(self, stats, total):
-        """Print batch processing summary"""
-        self.log(f"\n{'='*60}")
-        self.log(f"BATCH SUMMARY:")
-        self.log(f"  Total images: {total}")
-        self.log(f"  ✓ Processed: {stats['processed']}")
-        self.log(f"  ⊘ Skipped: {stats['skipped']}")
-        self.log(f"  ✗ Errors: {stats['errors']}")
-        
-        if stats['total_original_size'] > 0:
-            reduction_pct = ((stats['total_original_size'] - stats['total_new_size']) / 
-                           stats['total_original_size']) * 100
-            saved_mb = (stats['total_original_size'] - stats['total_new_size']) / (1024 * 1024)
-            
-            self.log(f"  Original: {stats['total_original_size']/(1024*1024):.2f} MB")
-            self.log(f"  New size: {stats['total_new_size']/(1024*1024):.2f} MB")
-            self.log(f"  Saved: {saved_mb:.2f} MB ({reduction_pct:.1f}% reduction)")
-        
-        self.log(f"{'='*60}\n")
-    
+
     def process_single_image(self, file_path):
-        """Process a single image with mandatory metadata preservation"""
         file_path = Path(file_path)
-        self.log(f"\nProcessing: {file_path.name}")
+        is_png = file_path.suffix.lower() == '.png'
         
-        # Get original file stats
         original_size = file_path.stat().st_size
         original_mtime = file_path.stat().st_mtime
         original_atime = file_path.stat().st_atime
+        original_ctime = file_path.stat().st_ctime  # Creation time
         
-        # Metadata extraction
+        # For PNG: output will replace the PNG with JPG
+        output_file = file_path.with_suffix('.jpg') if is_png else file_path
+             
+        # --- Start collecting log for this file ---
+        log_messages = [f"\nProcessing: {file_path.name}" + (" [PNG→JPG]" if is_png else "")]
+        
+        # 1. Metadata Backup (only for JPEG)
+        if not is_png:
+            metadata_file = file_path.with_suffix('.metadata.jpg')
+            shutil.copy2(file_path, metadata_file)
+        else:
+            metadata_file = None
+        
+        temp_file = output_file.with_suffix('.tmp.jpg')
+
         try:
-            metadata_file = self.extract_metadata(file_path)
-        except Exception as e:
-            raise Exception(f"Cannot proceed without metadata backup: {e}")
-        
-        temp_file = file_path.with_suffix('.tmp.jpg')
-        
-        try:
-            # Analyze image
+            # 2. Analyze
             stats = analyze_image_fast(file_path)
-            text_score = stats["edge_density"] / max(stats["texture"], 1.0)
-            chroma = "444" if text_score > 0.015 else "420"
             
-            # Handle resize
-            source_file = self.handle_resize(file_path, stats)
+            # --- CHROMA: Always use 4:4:4 with jpegli for best quality ---
+            chroma = "444"
             
-            # Build cjpegli command
-            cmd = self.build_cjpegli_command(source_file, temp_file, stats, chroma)
+            # For PNG, convert to high-quality temp JPEG first for cjpegli input
+            if is_png:
+                source_file = self.convert_png_to_temp_jpg(file_path)
+            else:
+                source_file = self.handle_resize(file_path)
             
-            # Execute
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-            if result.returncode != 0:
-                raise Exception(f"cjpegli failed: {result.stderr}")
+            # Build Command
+            cmd = [str(self.cjpegli_path), str(source_file), str(temp_file)]
             
-            # Cleanup resize temp
-            if source_file != file_path and source_file.exists():
+            predicted_distance = 0.0 
+            if self.auto_quality.get():
+                predicted_distance = predict_safe_distance(stats)
+                log_messages.append(f"  Auto distance: {predicted_distance:.2f} (edge={stats['edge_density']:.3f}, tex={stats['texture']:.1f}, var={stats['variance']:.0f})")
+                cmd.extend([f"--distance={predicted_distance}", f"--chroma_subsampling={chroma}", "--progressive_level=2"])
+            else:
+                log_messages.append(f"  Manual quality: {self.quality.get()}")
+                cmd.append(f"--quality={self.quality.get()}")
+
+            # 3. Execute cjpegli
+            subprocess.run(cmd, capture_output=True, text=True, check=True, creationflags=0x08000000)
+            
+            if source_file != file_path and source_file.exists(): 
                 source_file.unlink()
             
-            # Check if optimization is worthwhile
+            # 4. Check Size
             new_size = temp_file.stat().st_size
             reduction = ((original_size - new_size) / original_size) * 100
             
-            if not self.should_replace(reduction, original_size, new_size):
+            orig_fmt = f"{original_size:,}"
+            new_fmt = f"{new_size:,}"
+            
+            should_replace = False
+            skip_reason = ""
+            replaced = False  # Initialize here
+
+            
+            # --- Size comparison logic (works for both PNG and JPEG) ---
+            if reduction <= 5:
+                should_replace = False
+                skip_reason = f"  ⊘ Skipped: No reduction possible ({orig_fmt} → {new_fmt})"
+            elif self.enable_min_reduction.get() and reduction < self.min_reduction.get():
+                should_replace = False
+                skip_reason = f"  ⊘ Skipped: {reduction:.1f}% < {self.min_reduction.get()}% threshold ({orig_fmt} → {new_fmt})"
+            else:
+                should_replace = True
+                if is_png:
+                    log_messages.append(f"  {orig_fmt} (PNG) → {new_fmt} (JPG) ({reduction:.1f}% reduction)")
+                else:
+                    log_messages.append(f"  {orig_fmt} → {new_fmt} bytes ({reduction:.1f}% reduction)")
+
+            if should_replace:
+                # Move to final location
+                shutil.move(str(temp_file), str(output_file))
+
+                
+                # 5. Restore Metadata and Timestamps
+                if is_png:
+                    # For PNG: Set EXIF creation date, then restore file timestamps
+                    date_str = datetime.fromtimestamp(original_mtime).strftime('%Y:%m:%d %H:%M:%S')
+                    
+                    exif_cmd = [
+                        str(self.exiftool_path),
+                        '-charset', 'filename=UTF8',
+                        f'-DateTimeOriginal={date_str}',
+                        f'-CreateDate={date_str}',
+                        '-overwrite_original',
+                        str(output_file)
+                    ]
+                    subprocess.run(exif_cmd, capture_output=True, text=True, creationflags=0x08000000)
+                    
+                    # Restore file system timestamps AFTER ExifTool
+                    os.utime(output_file, (original_atime, original_mtime))
+                    
+                    # Set Windows creation time if pywin32 is available
+                    if HAS_PYWIN32:
+                        try:
+                            wintime = pywintypes.Time(datetime.fromtimestamp(original_mtime))
+                            handle = win32file.CreateFile(
+                                str(output_file),
+                                win32con.GENERIC_WRITE,
+                                win32con.FILE_SHARE_READ | win32con.FILE_SHARE_WRITE,
+                                None,
+                                win32con.OPEN_EXISTING,
+                                win32con.FILE_ATTRIBUTE_NORMAL,
+                                None
+                            )
+                            win32file.SetFileTime(handle, wintime, None, None)
+                            win32file.CloseHandle(handle)
+                        except Exception:
+                            pass  # Silent fail on timestamp errors
+                    
+                    # Delete original PNG
+                    file_path.unlink()
+                elif metadata_file:
+                    # For JPEG: Restore full EXIF metadata
+                    if not metadata_file.exists():
+                        # Revert: restore original from temp if metadata backup is missing
+                        if output_file.exists():
+                            output_file.unlink()
+                        raise Exception(f"Metadata backup file missing: {metadata_file.name}")
+                    
+                    # Use short 8.3 DOS paths ONLY for ExifTool command
+                    import ctypes
+                    buf_meta = ctypes.create_unicode_buffer(512)
+                    buf_output = ctypes.create_unicode_buffer(512)
+                    ctypes.windll.kernel32.GetShortPathNameW(str(metadata_file), buf_meta, 512)
+                    ctypes.windll.kernel32.GetShortPathNameW(str(output_file), buf_output, 512)
+                    short_metadata_path = buf_meta.value if buf_meta.value else str(metadata_file)
+                    short_output_path = buf_output.value if buf_output.value else str(output_file)
+                    
+                    restore_cmd = [
+                        str(self.exiftool_path),
+                        '-charset', 'filename=UTF8',
+                        f'-tagsfromfile={short_metadata_path}',
+                        '-all:all', 
+                        '-overwrite_original', 
+                        short_output_path
+                    ]
+                    
+                    result = subprocess.run(restore_cmd, capture_output=True, text=True, creationflags=0x08000000)
+                    
+                    if result.returncode != 0:
+                        # Revert: restore original from metadata backup
+                        shutil.copy2(metadata_file, output_file)
+                        raise Exception(f"ExifTool Error: {result.stderr}")
+
+                    # Use LONG path for Python operations
+                    try:
+                        # Check if file exists (ExifTool might not have renamed it)
+                        if output_file.exists():
+                            os.utime(output_file, (original_atime, original_mtime))
+                        elif Path(short_output_path).exists():
+                            # If short name exists, rename back to long name first
+                            Path(short_output_path).rename(output_file)
+                            os.utime(output_file, (original_atime, original_mtime))
+                    except Exception as e:
+                        log_messages.append(f"  [WARNING] Could not set timestamps: {str(e)}")
+
+                    replaced = True
+            else:
                 temp_file.unlink()
-                metadata_file.unlink()
-                return {
-                    'original_size': original_size,
-                    'new_size': original_size,
-                    'replaced': False
-                }
+                log_messages.append(skip_reason)
+                replaced = False
             
-            # Replace original
-            shutil.move(str(temp_file), str(file_path))
-            
-            # MANDATORY metadata restoration
-            try:
-                self.restore_metadata(file_path, metadata_file)
-            except Exception as e:
-                raise Exception(f"Failed to restore metadata (file corrupted): {e}")
-            
-            # Restore timestamps
-            os.utime(file_path, (original_atime, original_mtime))
-            
-            self.log(f"  {original_size:,} → {new_size:,} bytes ({reduction:.1f}% reduction)")
-            
-            return {
-                'original_size': original_size,
-                'new_size': new_size,
-                'replaced': True
-            }
-            
+            self.safe_log("\n".join(log_messages))
+                
         except Exception as e:
-            # Cleanup on error
-            if temp_file.exists():
-                temp_file.unlink()
+            if temp_file.exists(): temp_file.unlink()
+            log_messages.append(f"✗ ERROR: {str(e)}")
+            self.safe_log("\n".join(log_messages))
+            raise e
+        finally:
+            # Always delete metadata backup (whether replaced or skipped)
             if metadata_file and metadata_file.exists():
                 metadata_file.unlink()
-            raise
-    
-    def handle_resize(self, file_path, stats):
-        """Handle image resizing if enabled"""
-        if not self.enable_resize.get():
-            return file_path
+
+            
+        return {'original_size': original_size, 'new_size': new_size if replaced else original_size, 'replaced': replaced}
+
+    def convert_png_to_temp_jpg(self, png_path):
+        """Convert PNG to high-quality temporary JPEG for cjpegli processing."""
+        temp_jpg = png_path.with_suffix('.png_temp.jpg')
         
+        img = Image.open(png_path)
+        
+        # Handle transparency by converting to RGB
+        if img.mode in ('RGBA', 'LA', 'P'):
+            # Create white background
+            background = Image.new('RGB', img.size, (255, 255, 255))
+            if img.mode == 'P':
+                img = img.convert('RGBA')
+            background.paste(img, mask=img.split()[-1] if img.mode in ('RGBA', 'LA') else None)
+            img = background
+        elif img.mode != 'RGB':
+            img = img.convert('RGB')
+        
+        # Apply resize if enabled
+        if self.enable_resize.get():
+            w, h = img.size
+            if max(w, h) > self.max_width.get():
+                ratio = self.max_width.get() / max(w, h)
+                img = img.resize((int(w*ratio), int(h*ratio)), Image.Resampling.LANCZOS)
+        
+        # Save as high-quality JPEG for cjpegli input
+        img.save(temp_jpg, 'JPEG', quality=98, subsampling=0)
+        return temp_jpg
+
+    def handle_resize(self, file_path):
+        if not self.enable_resize.get(): return file_path
         img = Image.open(file_path)
-        width, height = img.size
-        max_dim = max(width, height)
+        w, h = img.size
+        if max(w, h) <= self.max_width.get(): return file_path
         
-        if max_dim > self.max_width.get():
-            ratio = self.max_width.get() / max_dim
-            new_width = int(width * ratio)
-            new_height = int(height * ratio)
-            img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
-            resized_temp = file_path.with_suffix('.resized.jpg')
-            img.save(resized_temp, 'JPEG', quality=99)
-            self.log(f"  Resized: {width}x{height} → {new_width}x{new_height}")
-            return resized_temp
+        ratio = self.max_width.get() / max(w, h)
+        img = img.resize((int(w*ratio), int(h*ratio)), Image.Resampling.LANCZOS)
+        temp = file_path.with_suffix('.resized.jpg')
+        img.save(temp, quality=98)
+        return temp
+
+    def print_summary(self, total):
+        s = self.batch_stats
         
-        return file_path
-    
-    def build_cjpegli_command(self, source_file, temp_file, stats, chroma):
-        """Build cjpegli command based on settings"""
-        cmd = [str(self.cjpegli_path), str(source_file), str(temp_file)]
+        orig_mb = s['original_size'] / (1024*1024)
+        new_mb = s['new_size'] / (1024*1024)
+        saved_mb = orig_mb - new_mb
         
-        if self.auto_quality.get():
-            predicted_distance = predict_safe_distance(stats)
-            self.log(f"  Auto distance: {predicted_distance:.2f} "
-                    f"(edge={stats['edge_density']:.3f}, "
-                    f"tex={stats['texture']:.1f}, "
-                    f"var={stats['variance']:.0f})")
-            cmd.extend([
-                f"--distance={predicted_distance}",
-                f"--chroma_subsampling={chroma}",
-                "--progressive_level=2"
-            ])
-        else:
-            self.log(f"  Manual quality: {self.quality.get()}")
-            cmd.extend([
-                f"--quality={self.quality.get()}",
-                "--chroma_subsampling=444",
-                "--progressive_level=2"
-            ])
+        pct = 0
+        if s['original_size'] > 0:
+             pct = ((s['original_size'] - s['new_size']) / s['original_size']) * 100
         
-        return cmd
-    
-    def should_replace(self, reduction, original_size, new_size):
-        """Determine if optimized file should replace original"""
-        if reduction <= 0:
-            self.log(f"  ⊘ Skipped: No optimization possible")
-            return False
-        
-        # Always enforce minimum 5% reduction
-        min_threshold = self.min_reduction.get() if self.enable_min_reduction.get() else 10
-        
-        if reduction < min_threshold:
-            self.log(f"  ⊘ Skipped: {reduction:.1f}% < {min_threshold}% threshold")
-            return False
-        
-        return True
+        msg = (f"\n{'='*60}\n"
+               f"BATCH SUMMARY:\n"
+               f"  Total images: {total}\n"
+               f"  ✓ Processed: {s['processed']}\n"
+               f"  ⊘ Skipped: {s['skipped']}\n"
+               f"  ✗ Errors: {s['errors']}\n"
+               f"{'-'*30}\n"
+               f"  Original Size: {orig_mb:.2f} MB\n"
+               f"  Optimized Size: {new_mb:.2f} MB\n"
+               f"  Total Saved: {saved_mb:.2f} MB ({pct:.1f}% reduction)\n"
+               f"{'='*60}\n")
+        self.safe_log(msg)
 
 if __name__ == "__main__":
     root = TkinterDnD.Tk()
