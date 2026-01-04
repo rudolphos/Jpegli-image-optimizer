@@ -55,9 +55,7 @@ def predict_safe_distance(stats):
     return max(0.62, min(distance, 1.0))
 
 def analyze_image_fast(image_path, max_size=None):
-    """
-    Full resolution analysis using OpenCV directly.
-    """
+    """Full resolution analysis using OpenCV directly."""
     try:
         # Load image stream directly to numpy array (Fastest method)
         # 0 flag loads as Grayscale directly
@@ -326,6 +324,7 @@ class JPEGLIOptimizer:
         try:
             cmd = [
                 str(self.exiftool_path),
+                '-charset', 'filename=UTF8'
                 '-tagsfromfile', str(metadata_file),
                 '-all:all',
                 '-overwrite_original',
@@ -412,7 +411,7 @@ class JPEGLIOptimizer:
         original_mtime = file_path.stat().st_mtime
         original_atime = file_path.stat().st_atime
         
-        # MANDATORY metadata extraction
+        # Metadata extraction
         try:
             metadata_file = self.extract_metadata(file_path)
         except Exception as e:
@@ -530,8 +529,11 @@ class JPEGLIOptimizer:
             self.log(f"  ⊘ Skipped: No optimization possible")
             return False
         
-        if self.enable_min_reduction.get() and reduction < self.min_reduction.get():
-            self.log(f"  ⊘ Skipped: {reduction:.1f}% < {self.min_reduction.get()}% threshold")
+        # Always enforce minimum 5% reduction
+        min_threshold = self.min_reduction.get() if self.enable_min_reduction.get() else 10
+        
+        if reduction < min_threshold:
+            self.log(f"  ⊘ Skipped: {reduction:.1f}% < {min_threshold}% threshold")
             return False
         
         return True
