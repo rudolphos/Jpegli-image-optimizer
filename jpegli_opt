@@ -106,31 +106,23 @@ def analyze_image_fast(image_path, max_size=None):
     }
 
 # --- MAIN CLASS ---
-
 class JPEGLIOptimizer:
     def __init__(self, root):
         self.root = root
         self.root.title("JPEGLI Image Optimizer")
         self.root.geometry("550x600")
-                
-        # Style configuration
-        style = ttk.Style()
-        style.theme_use('xpnative')
-        
-        # Make sliders thicker
-        style.configure('Horizontal.TScale', sliderlength=20, sliderthickness=15)
-        
+       
         # Paths
         script_dir = Path(__file__).parent
         self.cjpegli_path = script_dir / "jxl" / "cjpegli.exe"
         self.exiftool_path = script_dir / "exiftool.exe"
         
         # Variables
-        self.quality = tk.IntVar(value=94)
+        self.quality = tk.IntVar(value=95)
         self.max_width = tk.IntVar(value=2000)
         self.enable_resize = tk.BooleanVar(value=False)
         self.auto_quality = tk.BooleanVar(value=True)
-        self.min_reduction = tk.IntVar(value=15)
+        self.min_reduction = tk.IntVar(value=20)
         self.enable_min_reduction = tk.BooleanVar(value=False)
         self.processing = False
         
@@ -160,7 +152,7 @@ class JPEGLIOptimizer:
         title_label = tk.Label(
             self.root, 
             text="JPEGLI Optimizer", 
-            font=("Arial", 13, "bold")
+            font=("Arial Nova", 13, "bold")
         )
         title_label.pack(pady=8)
         
@@ -178,12 +170,12 @@ class JPEGLIOptimizer:
             command=self.toggle_quality_mode
         ).pack(side="left")
         
-        # Quality slider frame (manual mode only)
+        # Quality slider frame (manual mode)
         self.quality_frame = ttk.Frame(settings_frame)
         ttk.Label(self.quality_frame, text="Quality:").pack(side="left")
         quality_slider = ttk.Scale(
             self.quality_frame, 
-            from_=60, 
+            from_=75, 
             to=100, 
             variable=self.quality, 
             orient="horizontal", 
@@ -238,7 +230,7 @@ class JPEGLIOptimizer:
         self.drop_label = tk.Label(
             drop_frame, 
             text="Drag and drop JPG/JPEG images here\n\n📂",
-            font=("Arial", 12),
+            font=("Arial Nova", 12),
             bg="#f0f0f0",
             relief="solid",
             borderwidth=1
@@ -519,7 +511,11 @@ class JPEGLIOptimizer:
             ])
         else:
             self.log(f"  Manual quality: {self.quality.get()}")
-            cmd.append(f"--quality={self.quality.get()}")
+            cmd.extend([
+                f"--quality={self.quality.get()}",
+                "--chroma_subsampling=444",
+                "--progressive_level=2"
+            ])
         
         return cmd
     
