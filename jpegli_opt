@@ -344,7 +344,6 @@ class JPEGLIOptimizer:
         
         total = len(files)
         self.log(f"Starting batch processing of {total} images...")
-        self.log(f"Metadata preservation: ENABLED (mandatory)\n")
         
         stats = {
             'total_original_size': 0,
@@ -489,7 +488,7 @@ class JPEGLIOptimizer:
             new_height = int(height * ratio)
             img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
             resized_temp = file_path.with_suffix('.resized.jpg')
-            img.save(resized_temp, 'JPEG', quality=95)
+            img.save(resized_temp, 'JPEG', quality=99)
             self.log(f"  Resized: {width}x{height} → {new_width}x{new_height}")
             return resized_temp
         
