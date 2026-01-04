@@ -26,7 +26,7 @@ Unlike standard compressors that apply a static quality (e.g., Quality 85%) to e
 #### 1. Python Dependencies
 Install the required Python libraries:
 ```bash
-pip install tkinterdnd2-universal pillow opencv-python numpy
+pip install tkinterdnd2-universal pillow opencv-python numpy pywin32
 ```
 #### 2. External Tools
 
