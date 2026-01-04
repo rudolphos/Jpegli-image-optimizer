@@ -10,6 +10,16 @@ import threading
 import concurrent.futures
 import cv2
 import numpy as np
+from datetime import datetime
+
+# Windows-specific imports for setting file creation time
+try:
+    import pywintypes  # type: ignore
+    import win32file  # type: ignore
+    import win32con  # type: ignore
+    HAS_PYWIN32 = True
+except ImportError:
+    HAS_PYWIN32 = False
 
 # --- HELPER FUNCTIONS ---
 
