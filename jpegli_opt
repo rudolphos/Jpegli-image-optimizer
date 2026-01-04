@@ -12,79 +12,93 @@ import numpy as np
 
 # --- HELPER FUNCTIONS ---
 def predict_safe_distance(stats):
-    """Predict optimal Butteraugli distance based on image characteristics"""
+    """
+    Predict optimal Butteraugli distance using Fluid Linear Logic.
+    Refined for ~49-50% reduction (High Quality).
+    """
     edge = stats["edge_density"]
     texture = stats["texture"]
     variance = stats["variance"]
     noise = stats["noise"]
 
-    distance = 0.65
+    # --- 1. THE BASELINE ---
+    # Lowered from 0.65 to 0.62.
+    # This adds roughly 3-5% to the file size across the board for extra safety.
+    distance = 0.62
 
-    # Texture masking
-    if texture > 18:
-        distance += 0.5
-    elif texture > 10:
-        distance += 0.25
+    # --- 2. DYNAMIC TEXTURE BONUS (Linear) ---
+    # Increased threshold from 5.0 to 6.0.
+    # Now, images must be "properly textured" before we compress them more.
+    if texture > 6.0:
+        # Slope remains 0.02
+        tex_bonus = (texture - 6.0) * 0.02
+        # Cap remains 0.40
+        distance += min(tex_bonus, 0.40)
 
-    # Noise masking
-    if noise > 8:
-        distance += 0.4
-    elif noise > 4:
-        distance += 0.2
+    # --- 3. EDGE BRAKING ---
+    # (Face/Text Saver)
+    if edge > 0.10:
+        brake = (edge - 0.10) * 2.6
+        distance -= brake
 
-    # Flat areas
-    if variance < 250:
-        distance -= 0.35
-    elif variance < 600:
-        distance -= 0.15
+    # --- 4. NOISE & SKY SAFETY ---
+    if noise > 6.0:
+        distance += 0.05
+    
+    # Gradient protection
+    if variance < 800:
+        distance -= 0.05
 
-    # Low-texture smooth photos
-    if texture < 6 and variance < 800:
-        distance -= 0.2
+    # --- 5. HARD BOUNDARIES ---
+    # Min 0.62 (Very high quality)
+    # Max 1.0 (Safe limit)
+    return max(0.62, min(distance, 1.0))
 
-    # Text detection
-    text_score = edge / max(texture, 1.0)
-    if text_score > 0.018:
-        distance -= 0.25
-    elif text_score > 0.012:
-        distance -= 0.15
+def analyze_image_fast(image_path, max_size=None):
+    """
+    Full resolution analysis using OpenCV directly.
+    """
+    try:
+        # Load image stream directly to numpy array (Fastest method)
+        # 0 flag loads as Grayscale directly
+        stream = open(image_path, "rb")
+        bytes_data = bytearray(stream.read())
+        numpy_array = np.asarray(bytes_data, dtype=np.uint8)
+        stream.close()
+        
+        gray = cv2.imdecode(numpy_array, 0) # 0 = CV_LOAD_IMAGE_GRAYSCALE
+        
+        if gray is None:
+            raise Exception("Image decode failed")
 
-    # General edge safety
-    if edge > 0.08:
-        distance -= 0.1
+    except Exception as e:
+        # Fallback
+        img = Image.open(image_path).convert("L")
+        gray = np.array(img)
 
-    # Ultra-flat hard cap
-    if variance < 180:
-        distance = min(distance, 0.8)
+    # 1. Edge Detection
+    # Thresholds adjusted for full resolution natural photography
+    edges = cv2.Canny(gray, 50, 150)
+    edge_density = np.mean(edges) / 255.0
 
-    return max(0.65, min(distance, 2.2))
-
-def analyze_image_fast(image_path, max_size=512):
-    """Fast perceptual analysis for image characteristics"""
-    img = Image.open(image_path).convert("RGB")
-
-    # Downscale for performance
-    w, h = img.size
-    scale = min(max_size / max(w, h), 1.0)
-    if scale < 1.0:
-        img = img.resize((int(w * scale), int(h * scale)), Image.BICUBIC)
-
-    img_np = np.array(img)
-    gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
-
-    # Edge detection
-    edges = cv2.Canny(gray, 80, 160)
-    edge_density = edges.mean()
-
-    # Texture/detail
+    # 2. Texture/Detail
     lap = cv2.Laplacian(gray, cv2.CV_64F)
     texture = np.mean(np.abs(lap))
 
-    # Flatness
-    variance = gray.var()
+    # 3. Variance (Flatness)
+    variance = np.var(gray)
 
-    # Noise estimation
-    noise = np.median(np.abs(gray - cv2.GaussianBlur(gray, (3, 3), 0)))
+    # 4. Noise Estimation (Center Crop Strategy)
+    # Analyzing full 24MP+ noise is slow, so we take a large center sample
+    h, w = gray.shape
+    sample_size = 2048
+    if h > sample_size and w > sample_size:
+        y, x = (h - sample_size)//2, (w - sample_size)//2
+        crop = gray[y:y+sample_size, x:x+sample_size]
+    else:
+        crop = gray
+        
+    noise = np.median(np.abs(crop - cv2.GaussianBlur(crop, (3, 3), 0)))
 
     return {
         "edge_density": edge_density,
@@ -92,7 +106,6 @@ def analyze_image_fast(image_path, max_size=512):
         "variance": variance,
         "noise": noise
     }
-
 
 # --- MAIN CLASS ---
 
@@ -318,13 +331,9 @@ class JPEGLIOptimizer:
                 '-overwrite_original',
                 str(file_path)
             ]
-            
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-            
             if result.returncode != 0:
                 raise Exception(f"ExifTool failed: {result.stderr}")
-            
-            self.log(f"  ✓ Metadata preserved (EXIF/IPTC/XMP)")
             metadata_file.unlink()
             
         except Exception as e:
