@@ -26,11 +26,20 @@ def predict_safe_distance(stats):
     elif texture > 10:
         distance += 0.25
 
-    # Noise masking
-    if noise > 8:
-        distance += 0.4
-    elif noise > 4:
-        distance += 0.2
+    # ENHANCED: Protect grainy areas even more aggressively
+    if noise > 6:
+        distance += 0.5  # Your current: 0.4
+    elif noise > 3:  # NEW: catch subtle grain
+        distance += 0.25
+    
+    # NEW: Protect film-like texture
+    if noise > 5 and texture < 12:
+        # Grain without detail = film photography
+        distance += 0.3
+
+    # NEW: Protect gradients from banding
+    if stats.get("is_smooth_gradient", False):
+        distance -= 0.25
 
     # Flat areas
     if variance < 250:
@@ -86,11 +95,21 @@ def analyze_image_fast(image_path, max_size=512):
     # Noise estimation
     noise = np.median(np.abs(gray - cv2.GaussianBlur(gray, (3, 3), 0)))
 
+        # NEW: Detect smooth gradients (sky, studio backgrounds)
+    sobel_x = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
+    sobel_y = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
+    gradient_smoothness = np.std(np.sqrt(sobel_x**2 + sobel_y**2))
+    
+    # Low gradient variance = smooth gradient
+    is_smooth_gradient = (gradient_smoothness < 15 and variance > 200)
+
     return {
         "edge_density": edge_density,
         "texture": texture,
         "variance": variance,
-        "noise": noise
+        "noise": noise,
+        "gradient_smoothness": gradient_smoothness,
+        "is_smooth_gradient": is_smooth_gradient
     }
 
 
@@ -101,6 +120,9 @@ class JPEGLIOptimizer:
         self.root = root
         self.root.title("JPEGLI Image Optimizer")
         self.root.geometry("550x600")
+        
+        # Handle Window Close Event Gracefully
+        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
         
         # Style configuration
         style = ttk.Style()
@@ -122,6 +144,7 @@ class JPEGLIOptimizer:
         self.min_reduction = tk.IntVar(value=15)
         self.enable_min_reduction = tk.BooleanVar(value=False)
         self.processing = False
+        self.stop_requested = False  # Flag for graceful shutdown
         
         # Validate tools on startup
         self.validate_tools()
@@ -291,9 +314,22 @@ class JPEGLIOptimizer:
             return
         
         # Process in separate thread
+        # NOTE: Not using daemon=True to ensure file operations complete if user tries to close
         thread = threading.Thread(target=self.process_images, args=(image_files,))
-        thread.daemon = True
         thread.start()
+
+    def on_close(self):
+        """Handle window close request"""
+        if self.processing:
+            if messagebox.askyesno("Processing Active", 
+                                 "Optimization is currently running.\n\n"
+                                 "Stop after the current file is finished?\n"
+                                 "(This prevents file corruption)"):
+                self.stop_requested = True
+                self.log("\n!!! STOPPING requested... waiting for current file to finish !!!")
+                # We do NOT destroy here. The processing thread will trigger destroy when done.
+        else:
+            self.root.destroy()
         
     def extract_metadata(self, file_path):
         """Extract metadata using ExifTool - MANDATORY"""
@@ -340,6 +376,7 @@ class JPEGLIOptimizer:
     def process_images(self, files):
         """Process batch of images"""
         self.processing = True
+        self.stop_requested = False
         self.progress_var.set(0)
         
         total = len(files)
@@ -354,6 +391,11 @@ class JPEGLIOptimizer:
         }
         
         for idx, file_path in enumerate(files):
+            # Check for stop request
+            if self.stop_requested:
+                self.log("\nBatch processing stopped by user.")
+                break
+
             try:
                 result = self.process_single_image(file_path)
                 if result:
@@ -372,6 +414,11 @@ class JPEGLIOptimizer:
         # Summary
         self.print_summary(stats, total)
         self.processing = False
+        
+        # If we were waiting to close, close now
+        if self.stop_requested:
+            # Use root.after to safely interact with UI thread
+            self.root.after(100, self.root.destroy)
     
     def print_summary(self, stats, total):
         """Print batch processing summary"""
@@ -517,10 +564,11 @@ class JPEGLIOptimizer:
     
     def should_replace(self, reduction, original_size, new_size):
         """Determine if optimized file should replace original"""
-        if reduction <= 0:
-            self.log(f"  ⊘ Skipped: No optimization possible")
+        # --- NEW: Hard 1% threshold ---
+        if reduction < 1.0:
+            self.log(f"  ⊘ Skipped: Gain too low ({reduction:.2f}% < 1.0%)")
             return False
-        
+            
         if self.enable_min_reduction.get() and reduction < self.min_reduction.get():
             self.log(f"  ⊘ Skipped: {reduction:.1f}% < {self.min_reduction.get()}% threshold")
             return False
