@@ -2,7 +2,7 @@
 # Jpegli image optimizer
 
 JPEGLI Optimizer is a simplistic, drag-and-drop GUI-based desktop tool designed to be an open source based alternative of JPEGmini.
-It uses Computer Vision (OpenCV) to analyze every image individually—detecting noise, texture, and edges—to calculate the compression level. It then uses the cjpegli encoder to compress the image without visible quality loss.
+It uses Computer Vision (OpenCV) to analyze every image individually—detecting noise, texture, and edges—to calculate the compression level. It then uses the [jpegli](https://github.com/google/jpegli) encoder to compress the image without visible quality loss.
 
 ### ✨ Features
 
