@@ -369,7 +369,7 @@ class JPEGLIOptimizer:
 
             
             # --- Size comparison logic (works for both PNG and JPEG) ---
-            if reduction <= 5:
+            if reduction <= 10:
                 should_replace = False
                 skip_reason = f"  ⊘ Skipped: No reduction possible ({orig_fmt} → {new_fmt})"
             elif self.enable_min_reduction.get() and reduction < self.min_reduction.get():
@@ -385,7 +385,7 @@ class JPEGLIOptimizer:
             if should_replace:
                 # Move to final location
                 shutil.move(str(temp_file), str(output_file))
-
+                replaced = True  # Mark as replaced for both PNG and JPEG
                 
                 # 5. Restore Metadata and Timestamps
                 if is_png:
@@ -469,8 +469,6 @@ class JPEGLIOptimizer:
                             os.utime(output_file, (original_atime, original_mtime))
                     except Exception as e:
                         log_messages.append(f"  [WARNING] Could not set timestamps: {str(e)}")
-
-                    replaced = True
             else:
                 temp_file.unlink()
                 log_messages.append(skip_reason)
