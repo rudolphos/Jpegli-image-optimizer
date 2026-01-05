@@ -318,12 +318,13 @@ class JPEGLIOptimizer:
         
         # 1. Metadata Backup (only for JPEG)
         if not is_png:
-            metadata_file = file_path.with_suffix('.metadata.jpg')
+            # Use a separate temp file name to avoid suffix issues
+            metadata_file = file_path.parent / (file_path.stem + '.metadata.jpg')
             shutil.copy2(file_path, metadata_file)
         else:
             metadata_file = None
         
-        temp_file = output_file.with_suffix('.tmp.jpg')
+        temp_file = output_file.parent / (output_file.stem + '.tmp.jpg')
 
         try:
             # 2. Analyze
@@ -431,41 +432,96 @@ class JPEGLIOptimizer:
                         # Revert: restore original from temp if metadata backup is missing
                         if output_file.exists():
                             output_file.unlink()
-                        raise Exception(f"Metadata backup file missing: {metadata_file.name}")
+                        raise Exception(f"Metadata backup file missing before ExifTool: {metadata_file}")
                     
-                    # Use short 8.3 DOS paths ONLY for ExifTool command
+                    # Verify output file exists
+                    if not output_file.exists():
+                        raise Exception(f"Output file missing before ExifTool: {output_file}")
+                    
+                    # Get short 8.3 paths for both files
                     import ctypes
-                    buf_meta = ctypes.create_unicode_buffer(512)
-                    buf_output = ctypes.create_unicode_buffer(512)
-                    ctypes.windll.kernel32.GetShortPathNameW(str(metadata_file), buf_meta, 512)
-                    ctypes.windll.kernel32.GetShortPathNameW(str(output_file), buf_output, 512)
-                    short_metadata_path = buf_meta.value if buf_meta.value else str(metadata_file)
-                    short_output_path = buf_output.value if buf_output.value else str(output_file)
                     
-                    restore_cmd = [
-                        str(self.exiftool_path),
-                        '-charset', 'filename=UTF8',
-                        f'-tagsfromfile={short_metadata_path}',
-                        '-all:all', 
-                        '-overwrite_original', 
-                        short_output_path
-                    ]
+                    def get_short_path(long_path):
+                        """Get Windows 8.3 short path, handling errors gracefully."""
+                        try:
+                            buf = ctypes.create_unicode_buffer(512)
+                            # Resolve to absolute path first
+                            abs_path = str(Path(long_path).resolve())
+                            ret = ctypes.windll.kernel32.GetShortPathNameW(abs_path, buf, 512)
+                            if ret > 0 and buf.value:
+                                short = buf.value
+                                # Verify it's actually a SHORT path (no Unicode, uses ~1 format)
+                                # If it's the same as input or still has Unicode, it failed
+                                if short != abs_path and '~' in short:
+                                    return short
+                        except Exception:
+                            pass
+                        return None
                     
-                    result = subprocess.run(restore_cmd, capture_output=True, text=True, creationflags=0x08000000)
+                    short_metadata = get_short_path(metadata_file)
+                    short_output = get_short_path(output_file)
                     
-                    if result.returncode != 0:
-                        # Revert: restore original from metadata backup
-                        shutil.copy2(metadata_file, output_file)
-                        raise Exception(f"ExifTool Error: {result.stderr}")
+                    # If short path conversion failed, try a different approach
+                    if not short_metadata or not short_output:
+                        # Copy metadata file to a temp location with ASCII-safe name
+                        import tempfile
+                        import threading
+                        import time
+                        # Create unique temp filenames using PID, thread ID, and timestamp
+                        unique_id = f"{os.getpid()}_{threading.get_ident()}_{int(time.time() * 1000000)}"
+                        temp_dir = Path(tempfile.gettempdir())
+                        temp_metadata = temp_dir / f"exif_meta_{unique_id}.jpg"
+                        temp_output = temp_dir / f"exif_out_{unique_id}.jpg"
+                        
+                        try:
+                            # Copy files to temp location
+                            shutil.copy2(metadata_file, temp_metadata)
+                            shutil.copy2(output_file, temp_output)
+                            
+                            # Run ExifTool on temp files
+                            restore_cmd = [
+                                str(self.exiftool_path),
+                                '-tagsfromfile',
+                                str(temp_metadata),
+                                '-all:all',
+                                '-overwrite_original',
+                                str(temp_output)
+                            ]
+                            
+                            result = subprocess.run(restore_cmd, capture_output=True, text=True, creationflags=0x08000000)
+                            
+                            if result.returncode != 0:
+                                raise Exception(f"ExifTool failed: {result.stderr.strip()}")
+                            
+                            # Copy result back
+                            shutil.copy2(temp_output, output_file)
+                            
+                        finally:
+                            # Clean up temp files
+                            if temp_metadata.exists():
+                                temp_metadata.unlink()
+                            if temp_output.exists():
+                                temp_output.unlink()
+                    else:
+                        # Use short paths directly
+                        restore_cmd = [
+                            str(self.exiftool_path),
+                            '-tagsfromfile',
+                            short_metadata,
+                            '-all:all',
+                            '-overwrite_original',
+                            short_output
+                        ]
+                        
+                        result = subprocess.run(restore_cmd, capture_output=True, text=True, creationflags=0x08000000)
+                        
+                        if result.returncode != 0:
+                            shutil.copy2(metadata_file, output_file)
+                            raise Exception(f"ExifTool Error: {result.stderr.strip()}")
 
-                    # Use LONG path for Python operations
+                    # Restore timestamps
                     try:
-                        # Check if file exists (ExifTool might not have renamed it)
                         if output_file.exists():
-                            os.utime(output_file, (original_atime, original_mtime))
-                        elif Path(short_output_path).exists():
-                            # If short name exists, rename back to long name first
-                            Path(short_output_path).rename(output_file)
                             os.utime(output_file, (original_atime, original_mtime))
                     except Exception as e:
                         log_messages.append(f"  [WARNING] Could not set timestamps: {str(e)}")
