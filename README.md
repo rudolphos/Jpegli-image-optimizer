@@ -30,7 +30,7 @@ pip install tkinterdnd2-universal pillow opencv-python numpy pywin32
 ```
 #### 2. External Tools
 
- - **cjpegli**: Download the libjxl binaries (jxl-x64-windows-static.zip) from [github.com/libjxl/libjxl/releases](https://github.com/libjxl/libjxl/releases), extract `cjpegli.exe`, `butteraugli_main.exe`, and place them in a folder named jxl inside the project root.
+ - **cjpegli**: Download the libjxl binaries (jxl-x64-windows-static.zip) from [github.com/libjxl/libjxl/releases](https://github.com/libjxl/libjxl/releases), extract `cjpegli.exe` and place in a folder named jxl inside the project root.
 
  - **ExifTool**: Download the "Windows Executable" zip from [exiftool.org](https://exiftool.org/). Extract the zip content into the project root. You should have `exiftool(-k).exe` and the `exiftool_files` folder side-by-side with the python script. Rename `exiftool(-k).exe` to `exiftool.exe`.
 
@@ -43,7 +43,6 @@ Ensure your directory looks like this:
  ├── exiftool.exe         # For metadata preservation
  └── /jxl
       └── cjpegli.exe     # The encoder
-      └── butteraugli_main.exe
 ```
 
 ### 🚀 Usage
@@ -76,7 +75,7 @@ As shown in this XnView comparison view—with the JPEGmini result above and the
 
 ## Results
 
-### JPEGLI Optimizer (Adaptive Butteraugli Distance)
+### JPEGLI Optimizer (Adaptive distance)
 ```
 Total images: 27
 ✓ Processed: 23
