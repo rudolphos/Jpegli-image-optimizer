@@ -503,21 +503,43 @@ class JPEGLIOptimizer:
                             if temp_output.exists():
                                 temp_output.unlink()
                     else:
-                        # Use short paths directly
-                        restore_cmd = [
-                            str(self.exiftool_path),
-                            '-tagsfromfile',
-                            short_metadata,
-                            '-all:all',
-                            '-overwrite_original',
-                            short_output
-                        ]
+                        # Use short paths for ExifTool, but work with temp copies to preserve filenames
+                        import tempfile
+                        import threading
+                        import time
+                        unique_id = f"{os.getpid()}_{threading.get_ident()}_{int(time.time() * 1000000)}"
+                        temp_dir = Path(tempfile.gettempdir())
+                        temp_metadata = temp_dir / f"exif_meta_{unique_id}.jpg"
+                        temp_output = temp_dir / f"exif_out_{unique_id}.jpg"
                         
-                        result = subprocess.run(restore_cmd, capture_output=True, text=True, creationflags=0x08000000)
-                        
-                        if result.returncode != 0:
-                            shutil.copy2(metadata_file, output_file)
-                            raise Exception(f"ExifTool Error: {result.stderr.strip()}")
+                        try:
+                            # Copy to temp with simple names
+                            shutil.copy2(metadata_file, temp_metadata)
+                            shutil.copy2(output_file, temp_output)
+                            
+                            # Run ExifTool on temp files
+                            restore_cmd = [
+                                str(self.exiftool_path),
+                                '-tagsfromfile',
+                                str(temp_metadata),
+                                '-all:all',
+                                '-overwrite_original',
+                                str(temp_output)
+                            ]
+                            
+                            result = subprocess.run(restore_cmd, capture_output=True, text=True, creationflags=0x08000000)
+                            
+                            if result.returncode != 0:
+                                raise Exception(f"ExifTool Error: {result.stderr.strip()}")
+                            
+                            # Copy result back to original filename
+                            shutil.copy2(temp_output, output_file)
+                            
+                        finally:
+                            if temp_metadata.exists():
+                                temp_metadata.unlink()
+                            if temp_output.exists():
+                                temp_output.unlink()
 
                     # Restore timestamps
                     try:
