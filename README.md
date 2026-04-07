@@ -9,6 +9,7 @@ It uses Computer Vision (OpenCV) to analyze every image individually—detecting
 *   Automatically determines the best quality setting based on image content (Texture/Noise/Edge analysis).
 *   Simple GUI to process single files or large batches instantly.
 *   Preserves all EXIF, IPTC, and XMP data using ExifTool, including file created and modified dates.
+*   With auto-mode unchecked, it has a manual mode where you can select Fixed JPEG quality percentage or fixed butteraugli distance (1 considered to be "visually lossless").
 *   Only overwrites the file if the file size is actually reduced.
 *   Optional resize downscaling for web optimization.
 *   Powered by the new JPEG XL library's `cjpegli` encoder (backward compatible with standard JPEG).
@@ -58,9 +59,8 @@ Ensure your directory looks like this:
 5.  The tool will replace the original files only if they can be compressed smaller without visual loss.
 
 ---
-
-<img width="550" height="630" alt="image" src="https://github.com/user-attachments/assets/42ba9c6d-6475-4a93-8f9b-388c093d78a3" />
-
+<img width="416" height="598" alt="manual distance" src="https://github.com/user-attachments/assets/5c729cf2-fc08-4144-8a7a-75a1ecbd84a5" />
+<img width="416" height="598" alt="automatic" src="https://github.com/user-attachments/assets/2f717c1f-9d83-47cc-992f-ecb1f46aac55" />
 ---
 
 As shown in this XnView comparison view—with the JPEGmini result above and the script output below—the visual similarity is nearly identical, though this script retains slightly more detail, less blurriness and blockiness when compared at 400% zoom level. 
