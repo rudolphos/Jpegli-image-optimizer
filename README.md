@@ -6,12 +6,12 @@ It uses Computer Vision (OpenCV) to analyze every image individually—detecting
 
 ### Features
 
-*   **Smart Compression:** Automatically determines the best quality setting based on image content (Texture/Noise/Edge analysis).
-*   **Drag & Drop:** Simple GUI to process single files or huge batches instantly.
-*   **Metadata Safe:** Preserves all EXIF, IPTC, and XMP data using ExifTool, including file created and modified dates.
-*   **Safety Checks:** Only overwrites the file if the file size is actually reduced.
-*   **Resize Options:** Optional downscaling for web optimization.
-*   **High Efficiency:** Powered by the new JPEG XL library's `cjpegli` encoder (backward compatible with standard JPEG).
+*   Automatically determines the best quality setting based on image content (Texture/Noise/Edge analysis).
+*   Simple GUI to process single files or large batches instantly.
+*   Preserves all EXIF, IPTC, and XMP data using ExifTool, including file created and modified dates.
+*   Only overwrites the file if the file size is actually reduced.
+*   Optional resize downscaling for web optimization.
+*   Powered by the new JPEG XL library's `cjpegli` encoder (backward compatible with standard JPEG).
 
 ### How it Works
 
