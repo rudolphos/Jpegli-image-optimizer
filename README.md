@@ -1,10 +1,10 @@
 
 # Jpegli image optimizer
 
-JPEGLI Optimizer is a simplistic, drag-and-drop GUI-based desktop tool designed to be an open source based alternative of JPEGmini.
+JPEGLI Optimizer is a lightweight, drag-and-drop GUI-based tool designed to be an open source based alternative of JPEGmini.
 It uses Computer Vision (OpenCV) to analyze every image individually—detecting noise, texture, and edges—to calculate the compression level. It then uses the [jpegli](https://github.com/google/jpegli) encoder to compress the image without visible quality loss.
 
-### ✨ Features
+### Features
 
 *   **Smart Compression:** Automatically determines the best quality setting based on image content (Texture/Noise/Edge analysis).
 *   **Drag & Drop:** Simple GUI to process single files or huge batches instantly.
@@ -13,7 +13,7 @@ It uses Computer Vision (OpenCV) to analyze every image individually—detecting
 *   **Resize Options:** Optional downscaling for web optimization.
 *   **High Efficiency:** Powered by the new JPEG XL library's `cjpegli` encoder (backward compatible with standard JPEG).
 
-### 🛠️ How it Works
+### How it Works
 
 Unlike standard compressors that apply a static quality (e.g., Quality 85%) to every image, this tool analyzes the "perceptual complexity" of a photo:
 
@@ -21,7 +21,7 @@ Unlike standard compressors that apply a static quality (e.g., Quality 85%) to e
 2.  **Flat Areas/Skies:** The tool increases quality to prevent banding and blocking.
 3.  **Text/Sharp Edges:** The tool protects edges to ensure sharpness.
 
-### 📦 Installation
+### Installation
 
 #### 1. Python Dependencies
 Install the required Python libraries:
@@ -63,7 +63,9 @@ Ensure your directory looks like this:
 
 ---
 
-As shown in this XnView comparison view—with the JPEGmini result above and the script output below—the visual similarity is nearly identical, though this script retains slightly more detail, less blurriness and blockiness when compared at 400% zoom level. Pictured are tiny rocks on the sole of the shoe.
+As shown in this XnView comparison view—with the JPEGmini result above and the script output below—the visual similarity is nearly identical, though this script retains slightly more detail, less blurriness and blockiness when compared at 400% zoom level. 
+
+*Pictured are tiny rocks on the sole of the shoe.*
 
 <img width="959" height="829" alt="image" src="https://github.com/user-attachments/assets/78faf09c-8865-40ed-96ca-83026a61c0e2" />
 
