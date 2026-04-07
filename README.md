@@ -13,7 +13,11 @@ It uses Computer Vision (OpenCV) to analyze every image individually—detecting
 *   Only overwrites the file if the file size is actually reduced.
 *   Optional resize downscaling for web optimization.
 *   Powered by the new JPEG XL library's `cjpegli` encoder (backward compatible with standard JPEG).
+---
+<img width="416" height="598" alt="manual distance" src="https://github.com/user-attachments/assets/5c729cf2-fc08-4144-8a7a-75a1ecbd84a5" />
+<img width="416" height="598" alt="automatic" src="https://github.com/user-attachments/assets/2f717c1f-9d83-47cc-992f-ecb1f46aac55" />
 
+---
 ### How it Works
 
 Unlike standard compressors that apply a static quality (e.g., Quality 85%) to every image, this tool analyzes the "perceptual complexity" of a photo:
@@ -58,9 +62,6 @@ Ensure your directory looks like this:
 4.  **Drag and drop** your `.jpg`/`.jpeg` files onto the window.
 5.  The tool will replace the original files only if they can be compressed smaller without visual loss.
 
----
-<img width="416" height="598" alt="manual distance" src="https://github.com/user-attachments/assets/5c729cf2-fc08-4144-8a7a-75a1ecbd84a5" />
-<img width="416" height="598" alt="automatic" src="https://github.com/user-attachments/assets/2f717c1f-9d83-47cc-992f-ecb1f46aac55" />
 ---
 
 As shown in this XnView comparison view—with the JPEGmini result above and the script output below—the visual similarity is nearly identical, though this script retains slightly more detail, less blurriness and blockiness when compared at 400% zoom level. 
